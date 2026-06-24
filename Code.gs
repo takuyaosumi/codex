@@ -2,15 +2,17 @@
  * RMA Management for Google Sheets
  *
  * Workflow:
- * NewEntry sheet manual input -> 💎Jitbit > フォーム生成
- * -> entry ID issuance -> 管理台帳 append -> RMA form Google Doc generation.
+ * NewEntry sheet manual input -> Jitbit menu -> issue Entry ID
+ * -> append ledger -> copy and populate RMA Registration Form template.
  */
 
 const CONFIG = {
+  spreadsheetId: '1uGWkEmfg0B00mGANWSVLLMgMUWKEiKIbHncDZhRzBzs',
+  templateDocumentId: '1CSSxjyQbFN4HYw4uHJnPS9NqOTRvIsc9',
   newEntrySheetName: 'NewEntry',
-  ledgerSheetName: '管理台帳',
+  ledgerSheetName: 'RMA Ledger',
   outputFolderName: 'RMA Generated Forms',
-  menuName: '💎Jitbit',
+  menuName: '\uD83D\uDC8EJitbit',
   idPrefix: 'RMA',
   maxGoodsRows: 5,
   clearAfterSubmit: false,
@@ -65,17 +67,43 @@ const LEDGER_HEADERS = [
   'Notes',
 ];
 
+const PLACEHOLDER_MAP = {
+  entryId: ['{{ENTRY_ID}}', '{{YOUR_REF}}', '{{Your ref.}}'],
+  dateOfApplication: ['{{DATE}}', '{{DATE_OF_APPLICATION}}'],
+  company: ['{{COMPANY}}'],
+  contactPerson: ['{{CONTACT_PERSON}}'],
+  street: ['{{STREET}}'],
+  postalCode: ['{{POSTAL_CODE}}'],
+  municipality: ['{{MUNICIPALITY}}'],
+  country: ['{{COUNTRY}}'],
+  tel: ['{{TEL}}'],
+  email: ['{{EMAIL}}'],
+  returnCompany: ['{{RETURN_COMPANY}}'],
+  returnContactPerson: ['{{RETURN_CONTACT_PERSON}}'],
+  returnStreet: ['{{RETURN_STREET}}'],
+  returnPostalCode: ['{{RETURN_POSTAL_CODE}}'],
+  returnMunicipality: ['{{RETURN_MUNICIPALITY}}'],
+  returnCountry: ['{{RETURN_COUNTRY}}'],
+  returnTel: ['{{RETURN_TEL}}'],
+  returnEmail: ['{{RETURN_EMAIL}}'],
+  televicDeliveryNote: ['{{TELEVIC_DELIVERY_NOTE}}'],
+  televicInvoiceNumber: ['{{TELEVIC_INVOICE_NUMBER}}'],
+  installationProject: ['{{INSTALLATION_PROJECT}}'],
+  additionalRemarks: ['{{ADDITIONAL_REMARKS}}'],
+  reason: ['{{REASON}}'],
+};
+
 function onOpen() {
   SpreadsheetApp.getUi()
     .createMenu(CONFIG.menuName)
-    .addItem('フォーム生成', 'generateRmaForm')
+    .addItem('\u30D5\u30A9\u30FC\u30E0\u751F\u6210', 'generateRmaForm')
     .addSeparator()
-    .addItem('初期セットアップ', 'setupRmaSheets')
+    .addItem('\u521D\u671F\u30BB\u30C3\u30C8\u30A2\u30C3\u30D7', 'setupRmaSheets')
     .addToUi();
 }
 
 function setupRmaSheets() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const ss = getSpreadsheet_();
   const newEntrySheet = getOrCreateSheet_(ss, CONFIG.newEntrySheetName);
   const ledgerSheet = getOrCreateSheet_(ss, CONFIG.ledgerSheetName);
 
@@ -83,7 +111,7 @@ function setupRmaSheets() {
   setupLedgerSheet_(ledgerSheet);
 
   SpreadsheetApp.flush();
-  SpreadsheetApp.getUi().alert('RMA 管理シートの初期セットアップが完了しました。');
+  SpreadsheetApp.getUi().alert('RMA sheet setup is complete.');
 }
 
 function generateRmaForm() {
@@ -91,12 +119,12 @@ function generateRmaForm() {
   lock.waitLock(30000);
 
   try {
-    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const ss = getSpreadsheet_();
     const newEntrySheet = ss.getSheetByName(CONFIG.newEntrySheetName);
     const ledgerSheet = ss.getSheetByName(CONFIG.ledgerSheetName);
 
     if (!newEntrySheet || !ledgerSheet) {
-      throw new Error('NewEntry または 管理台帳 シートが見つかりません。先に「初期セットアップ」を実行してください。');
+      throw new Error('NewEntry or RMA Ledger sheet was not found. Run setup first.');
     }
 
     const entry = readNewEntry_(newEntrySheet);
@@ -114,12 +142,12 @@ function generateRmaForm() {
 
     SpreadsheetApp.flush();
     SpreadsheetApp.getUi().alert(
-      'フォーム生成が完了しました。\n\n' +
+      'RMA form was generated.\n\n' +
       'Entry ID: ' + entryId + '\n' +
       'Form URL: ' + formFile.getUrl()
     );
   } catch (error) {
-    SpreadsheetApp.getUi().alert('フォーム生成に失敗しました。\n\n' + error.message);
+    SpreadsheetApp.getUi().alert('Failed to generate RMA form.\n\n' + error.message);
     throw error;
   } finally {
     lock.releaseLock();
@@ -166,11 +194,11 @@ function validateEntry_(entry) {
     });
 
   if (missing.length > 0) {
-    throw new Error('必須項目が未入力です: ' + missing.join(', '));
+    throw new Error('Required fields are missing: ' + missing.join(', '));
   }
 
   if (entry.goods.length === 0) {
-    throw new Error('返送品情報を 1 行以上入力してください。');
+    throw new Error('Enter at least one returned goods row.');
   }
 }
 
@@ -198,22 +226,46 @@ function issueEntryId_(ledgerSheet) {
 function createRmaFormDocument_(entry, entryId, createdAt) {
   const folder = getOrCreateOutputFolder_();
   const title = entryId + ' RMA Registration Form - ' + entry.fields.company;
-  const doc = DocumentApp.create(title);
-  const file = DriveApp.getFileById(doc.getId());
-  folder.addFile(file);
-  DriveApp.getRootFolder().removeFile(file);
-
+  const templateFile = DriveApp.getFileById(CONFIG.templateDocumentId);
+  const file = templateFile.makeCopy(title, folder);
+  const doc = DocumentApp.openById(file.getId());
   const body = doc.getBody();
-  body.clear();
 
-  addTitle_(body, 'RMA FORM (Return Material Authorization)');
-  body.appendParagraph('RMA: To be completed by TELEVIC').setItalic(true);
-  body.appendParagraph('TELEVIC Conference NV');
-  body.appendParagraph('att. Customer Services');
-  body.appendParagraph('Leo Bekaertlaan 1');
-  body.appendParagraph('B-8870 IZEGEM (BELGIUM)');
-  body.appendParagraph('');
+  fillTemplate_(body, entry, entryId, createdAt);
+  appendGeneratedData_(body, entry, entryId, createdAt);
 
+  doc.saveAndClose();
+  return file;
+}
+
+function fillTemplate_(body, entry, entryId, createdAt) {
+  const values = buildTemplateValues_(entry, entryId, createdAt);
+
+  Object.keys(PLACEHOLDER_MAP).forEach(function(key) {
+    PLACEHOLDER_MAP[key].forEach(function(placeholder) {
+      body.replaceText(escapeRegExp_(placeholder), values[key] || '');
+    });
+  });
+
+  fillNextCellByLabel_(body, 'Date of the application', values.dateOfApplication);
+  fillNextCellByLabel_(body, 'Your ref.', entryId);
+  fillNextCellByLabel_(body, 'Company or institution', entry.fields.company);
+  fillNextCellByLabel_(body, 'Contact person', entry.fields.contactPerson);
+  fillNextCellByLabel_(body, 'Street', entry.fields.street);
+  fillNextCellByLabel_(body, 'Postal code', entry.fields.postalCode);
+  fillNextCellByLabel_(body, 'Municipality', entry.fields.municipality);
+  fillNextCellByLabel_(body, 'Country', entry.fields.country);
+  fillNextCellByLabel_(body, 'Tel.', entry.fields.tel);
+  fillNextCellByLabel_(body, 'Email', entry.fields.email);
+  fillNextCellByLabel_(body, 'Televic Delivery Note', entry.fields.televicDeliveryNote);
+  fillNextCellByLabel_(body, 'Televic Invoice Number', entry.fields.televicInvoiceNumber);
+  fillNextCellByLabel_(body, 'Installation / Project', entry.fields.installationProject);
+  fillNextCellByLabel_(body, 'Additional remarks', entry.fields.additionalRemarks);
+}
+
+function appendGeneratedData_(body, entry, entryId, createdAt) {
+  body.appendPageBreak();
+  addTitle_(body, 'Generated RMA Entry Data');
   addKeyValueTable_(body, [
     ['Date of the application', formatDate_(createdAt)],
     ['Your ref.', entryId],
@@ -232,7 +284,6 @@ function createRmaFormDocument_(entry, entryId, createdAt) {
   ]);
 
   addSection_(body, 'Return address data');
-  body.appendParagraph('(only to be filled out if different from applicant data)').setItalic(true);
   addKeyValueTable_(body, [
     ['Company or institution', entry.fields.returnCompany],
     ['Contact person', entry.fields.returnContactPerson],
@@ -247,6 +298,7 @@ function createRmaFormDocument_(entry, entryId, createdAt) {
   addSection_(body, 'Data concerning the goods that are to be returned');
   addGoodsTable_(body, entry.goods);
 
+  addSection_(body, 'Other data');
   addKeyValueTable_(body, [
     ['Goods were originally delivered with Televic Delivery Note', entry.fields.televicDeliveryNote],
     ['Televic Invoice Number', entry.fields.televicInvoiceNumber],
@@ -256,9 +308,34 @@ function createRmaFormDocument_(entry, entryId, createdAt) {
 
   addSection_(body, 'Reasons for sending back the material');
   addReasons_(body, entry.fields.reason);
+}
 
-  doc.saveAndClose();
-  return file;
+function buildTemplateValues_(entry, entryId, createdAt) {
+  return {
+    entryId: entryId,
+    dateOfApplication: formatDate_(createdAt),
+    company: entry.fields.company,
+    contactPerson: entry.fields.contactPerson,
+    street: entry.fields.street,
+    postalCode: entry.fields.postalCode,
+    municipality: entry.fields.municipality,
+    country: entry.fields.country,
+    tel: entry.fields.tel,
+    email: entry.fields.email,
+    returnCompany: entry.fields.returnCompany,
+    returnContactPerson: entry.fields.returnContactPerson,
+    returnStreet: entry.fields.returnStreet,
+    returnPostalCode: entry.fields.returnPostalCode,
+    returnMunicipality: entry.fields.returnMunicipality,
+    returnCountry: entry.fields.returnCountry,
+    returnTel: entry.fields.returnTel,
+    returnEmail: entry.fields.returnEmail,
+    televicDeliveryNote: entry.fields.televicDeliveryNote,
+    televicInvoiceNumber: entry.fields.televicInvoiceNumber,
+    installationProject: entry.fields.installationProject,
+    additionalRemarks: entry.fields.additionalRemarks,
+    reason: entry.fields.reason,
+  };
 }
 
 function appendLedgerRow_(sheet, entry, entryId, createdAt, formFile) {
@@ -299,7 +376,7 @@ function setupNewEntrySheet_(sheet) {
   sheet.setFrozenRows(1);
   sheet.autoResizeColumns(1, headers.length);
   sheet.getRange(2, 1, 1, headers.length).setBackground('#fff8e1');
-  sheet.getRange(2, 1).setNote('ここに 1 件分を手入力してから 💎Jitbit > フォーム生成 を実行してください。');
+  sheet.getRange(2, 1).setNote('Enter one RMA entry on row 2, then run Jitbit > Generate form.');
 
   const reasonColumn = headers.indexOf('Reason') + 1;
   if (reasonColumn > 0) {
@@ -336,6 +413,11 @@ function clearInputValues_(sheet) {
   if (lastColumn > 0) {
     sheet.getRange(2, 1, 1, lastColumn).clearContent();
   }
+}
+
+function getSpreadsheet_() {
+  const active = SpreadsheetApp.getActiveSpreadsheet();
+  return active || SpreadsheetApp.openById(CONFIG.spreadsheetId);
 }
 
 function getOrCreateSheet_(ss, sheetName) {
@@ -424,9 +506,36 @@ function addReasons_(body, selectedReason) {
   ];
 
   reasons.forEach(function(reason) {
-    const checked = normalize_(reason) === normalize_(selectedReason) ? '☑' : '☐';
+    const checked = normalize_(reason) === normalize_(selectedReason) ? '[x]' : '[ ]';
     body.appendParagraph(checked + ' ' + reason);
   });
+}
+
+function fillNextCellByLabel_(body, label, value) {
+  if (!value) return false;
+  const tables = body.getTables();
+  for (let tableIndex = 0; tableIndex < tables.length; tableIndex++) {
+    const table = tables[tableIndex];
+    for (let rowIndex = 0; rowIndex < table.getNumRows(); rowIndex++) {
+      const row = table.getRow(rowIndex);
+      for (let cellIndex = 0; cellIndex < row.getNumCells() - 1; cellIndex++) {
+        const cell = row.getCell(cellIndex);
+        if (normalizeLabel_(cell.getText()).indexOf(normalizeLabel_(label)) !== -1) {
+          row.getCell(cellIndex + 1).setText(value);
+          return true;
+        }
+      }
+    }
+  }
+  return false;
+}
+
+function escapeRegExp_(text) {
+  return String(text).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function normalizeLabel_(value) {
+  return String(value || '').replace(/\s+/g, ' ').trim().toLowerCase();
 }
 
 function normalize_(value) {
