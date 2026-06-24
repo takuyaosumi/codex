@@ -271,11 +271,25 @@ function copyTemplateAsGoogleDoc_(templateDocumentId, title, folder) {
     );
   }
 
-  const converted = Drive.Files.copy({
-    title: title,
-    mimeType: MimeType.GOOGLE_DOCS,
-    parents: [{ id: folder.getId() }],
-  }, templateDocumentId);
+  const blob = templateFile.getBlob().setName(title);
+  let converted;
+  try {
+    converted = Drive.Files.insert({
+      title: title,
+      mimeType: MimeType.GOOGLE_DOCS,
+      parents: [{ id: folder.getId() }],
+    }, blob, {
+      convert: true,
+      supportsAllDrives: true,
+      supportsTeamDrives: true,
+    });
+  } catch (error) {
+    throw new Error(
+      'Failed to convert the RMA template to Google Docs. ' +
+      'Open the template file once and confirm this account can access it, or save it as a native Google Docs file. ' +
+      'Template ID: ' + templateDocumentId + '. Original error: ' + error.message
+    );
+  }
 
   return DriveApp.getFileById(converted.id);
 }
