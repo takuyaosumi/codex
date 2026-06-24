@@ -246,8 +246,7 @@ function issueEntryId_(ledgerSheet) {
 function createRmaFormDocument_(entry, entryId, createdAt) {
   const folder = getOrCreateOutputFolder_();
   const title = entryId + ' RMA Registration Form - ' + entry.fields.company;
-  const templateFile = DriveApp.getFileById(CONFIG.templateDocumentId);
-  const file = templateFile.makeCopy(title, folder);
+  const file = copyTemplateAsGoogleDoc_(CONFIG.templateDocumentId, title, folder);
   const doc = DocumentApp.openById(file.getId());
   const body = doc.getBody();
 
@@ -256,6 +255,29 @@ function createRmaFormDocument_(entry, entryId, createdAt) {
 
   doc.saveAndClose();
   return file;
+}
+
+function copyTemplateAsGoogleDoc_(templateDocumentId, title, folder) {
+  const templateFile = DriveApp.getFileById(templateDocumentId);
+
+  if (templateFile.getMimeType() === MimeType.GOOGLE_DOCS) {
+    return templateFile.makeCopy(title, folder);
+  }
+
+  if (typeof Drive === 'undefined' || !Drive.Files) {
+    throw new Error(
+      'RMA template is not a native Google Docs file. Enable the Advanced Drive service, ' +
+      'or convert the template file to Google Docs format first.'
+    );
+  }
+
+  const converted = Drive.Files.copy({
+    title: title,
+    mimeType: MimeType.GOOGLE_DOCS,
+    parents: [{ id: folder.getId() }],
+  }, templateDocumentId);
+
+  return DriveApp.getFileById(converted.id);
 }
 
 function fillTemplate_(body, entry, entryId, createdAt) {
