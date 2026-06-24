@@ -9,6 +9,7 @@
 const CONFIG = {
   spreadsheetId: '1uGWkEmfg0B00mGANWSVLLMgMUWKEiKIbHncDZhRzBzs',
   templateDocumentId: '1CSSxjyQbFN4HYw4uHJnPS9NqOTRvIsc9',
+  initSheetName: '__init',
   newEntrySheetName: 'NewEntry',
   ledgerSheetName: 'RMA Ledger',
   outputFolderName: 'RMA Generated Forms',
@@ -104,9 +105,11 @@ function onOpen() {
 
 function setupRmaSheets() {
   const ss = getSpreadsheet_();
+  const initSheet = getOrCreateSheet_(ss, CONFIG.initSheetName);
   const newEntrySheet = getOrCreateSheet_(ss, CONFIG.newEntrySheetName);
   const ledgerSheet = getOrCreateSheet_(ss, CONFIG.ledgerSheetName);
 
+  setupInitSheet_(initSheet);
   setupNewEntrySheet_(newEntrySheet);
   setupLedgerSheet_(ledgerSheet);
 
@@ -120,14 +123,15 @@ function generateRmaForm() {
 
   try {
     const ss = getSpreadsheet_();
+    const initSheet = ss.getSheetByName(CONFIG.initSheetName);
     const newEntrySheet = ss.getSheetByName(CONFIG.newEntrySheetName);
     const ledgerSheet = ss.getSheetByName(CONFIG.ledgerSheetName);
 
-    if (!newEntrySheet || !ledgerSheet) {
-      throw new Error('NewEntry or RMA Ledger sheet was not found. Run setup first.');
+    if (!initSheet || !newEntrySheet || !ledgerSheet) {
+      throw new Error('__init, NewEntry, or RMA Ledger sheet was not found. Run setup first.');
     }
 
-    const entry = readNewEntry_(newEntrySheet);
+    const entry = readEntry_(initSheet, newEntrySheet);
     validateEntry_(entry);
 
     const entryId = issueEntryId_(ledgerSheet);
@@ -154,34 +158,50 @@ function generateRmaForm() {
   }
 }
 
-function readNewEntry_(sheet) {
+function readEntry_(initSheet, goodsSheet) {
+  return {
+    fields: readInitFields_(initSheet),
+    goods: readGoodsRows_(goodsSheet),
+  };
+}
+
+function readInitFields_(sheet) {
   const values = sheet.getDataRange().getDisplayValues();
-  const headerRow = values[0] || [];
-  const inputRow = values[1] || [];
   const byLabel = {};
 
-  headerRow.forEach(function(header, index) {
-    if (header) byLabel[String(header).trim()] = String(inputRow[index] || '').trim();
+  values.slice(1).forEach(function(row) {
+    const label = String(row[0] || '').trim();
+    if (label) byLabel[label] = String(row[1] || '').trim();
   });
 
-  const entry = {
-    fields: {},
-    goods: [],
-  };
-
+  const fields = {};
   ENTRY_FIELDS.forEach(function(field) {
-    entry.fields[field.key] = byLabel[field.label] || '';
+    fields[field.key] = byLabel[field.label] || '';
   });
 
-  for (let rowNumber = 1; rowNumber <= CONFIG.maxGoodsRows; rowNumber++) {
+  return fields;
+}
+
+function readGoodsRows_(sheet) {
+  const values = sheet.getDataRange().getDisplayValues();
+  const headerRow = values[0] || [];
+  const columnByLabel = {};
+  const goods = [];
+
+  headerRow.forEach(function(header, index) {
+    if (header) columnByLabel[String(header).trim()] = index;
+  });
+
+  values.slice(1, CONFIG.maxGoodsRows + 1).forEach(function(row) {
     const item = {};
     GOODS_FIELDS.forEach(function(field) {
-      item[field.key] = byLabel['Goods ' + rowNumber + ' - ' + field.label] || '';
+      const index = columnByLabel[field.label];
+      item[field.key] = index === undefined ? '' : String(row[index] || '').trim();
     });
-    if (hasAnyValue_(item)) entry.goods.push(item);
-  }
+    if (hasAnyValue_(item)) goods.push(item);
+  });
 
-  return entry;
+  return goods;
 }
 
 function validateEntry_(entry) {
@@ -359,38 +379,54 @@ function appendLedgerRow_(sheet, entry, entryId, createdAt, formFile) {
   ]);
 }
 
-function setupNewEntrySheet_(sheet) {
-  const headers = ENTRY_FIELDS.map(function(field) {
-    return field.label;
+function setupInitSheet_(sheet) {
+  const existingValues = sheet.getDataRange().getDisplayValues();
+  const valueByLabel = {};
+
+  existingValues.slice(1).forEach(function(row) {
+    const label = String(row[0] || '').trim();
+    if (label) valueByLabel[label] = row[1] || '';
   });
 
+  const rows = ENTRY_FIELDS.map(function(field) {
+    return [field.label, valueByLabel[field.label] || ''];
+  });
+
+  sheet.clear();
+  sheet.getRange(1, 1, 1, 2).setValues([['Field', 'Value']]);
+  sheet.getRange(2, 1, rows.length, 2).setValues(rows);
+  sheet.getRange(1, 1, 1, 2).setFontWeight('bold').setBackground('#e8f0fe');
+  sheet.setFrozenRows(1);
+  sheet.autoResizeColumns(1, 2);
+  sheet.getRange(2, 2, rows.length, 1).setBackground('#fff8e1');
+
+  const reasonRow = ENTRY_FIELDS.findIndex(function(field) {
+    return field.key === 'reason';
+  }) + 2;
+  if (reasonRow > 1) {
+    sheet.getRange(reasonRow, 2).setDataValidation(createReasonValidation_());
+  }
+}
+
+function setupNewEntrySheet_(sheet) {
+  const headers = ['Goods No'].concat(GOODS_FIELDS.map(function(field) {
+    return field.label;
+  }));
+  const rows = [];
+
   for (let rowNumber = 1; rowNumber <= CONFIG.maxGoodsRows; rowNumber++) {
-    GOODS_FIELDS.forEach(function(field) {
-      headers.push('Goods ' + rowNumber + ' - ' + field.label);
-    });
+    rows.push(['Goods ' + rowNumber, '', '', '', '', '', '']);
   }
 
   sheet.clear();
   sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+  sheet.getRange(2, 1, rows.length, headers.length).setValues(rows);
   sheet.getRange(1, 1, 1, headers.length).setFontWeight('bold').setBackground('#e8f0fe');
   sheet.setFrozenRows(1);
   sheet.autoResizeColumns(1, headers.length);
-  sheet.getRange(2, 1, 1, headers.length).setBackground('#fff8e1');
-  sheet.getRange(2, 1).setNote('Enter one RMA entry on row 2, then run Jitbit > Generate form.');
-
-  const reasonColumn = headers.indexOf('Reason') + 1;
-  if (reasonColumn > 0) {
-    const rule = SpreadsheetApp.newDataValidation()
-      .requireValueInList([
-        'warranty repair',
-        'repair out of warranty',
-        'DOA (dead on arrival)',
-        'Extended warranty applicable',
-      ], true)
-      .setAllowInvalid(true)
-      .build();
-    sheet.getRange(2, reasonColumn).setDataValidation(rule);
-  }
+  sheet.getRange(2, 2, rows.length, headers.length - 1).setBackground('#fff8e1');
+  sheet.getRange(2, 1, rows.length, 1).setFontWeight('bold').setBackground('#f3f6fb');
+  sheet.getRange(2, 2).setNote('Enter returned goods here. Common entry data is managed in __init.');
 }
 
 function setupLedgerSheet_(sheet) {
@@ -410,9 +446,21 @@ function setupLedgerSheet_(sheet) {
 
 function clearInputValues_(sheet) {
   const lastColumn = sheet.getLastColumn();
-  if (lastColumn > 0) {
-    sheet.getRange(2, 1, 1, lastColumn).clearContent();
+  if (lastColumn > 1) {
+    sheet.getRange(2, 2, CONFIG.maxGoodsRows, lastColumn - 1).clearContent();
   }
+}
+
+function createReasonValidation_() {
+  return SpreadsheetApp.newDataValidation()
+    .requireValueInList([
+      'warranty repair',
+      'repair out of warranty',
+      'DOA (dead on arrival)',
+      'Extended warranty applicable',
+    ], true)
+    .setAllowInvalid(true)
+    .build();
 }
 
 function getSpreadsheet_() {
